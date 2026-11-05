@@ -86,12 +86,20 @@ def admin_required(function):
     return wrapper
 
 
+@app.context_processor
+def inject_csrf_token():
+    # Disponibiliza o token para todos os templates, inclusive base.html.
+    return {'csrf_token': session.get('csrf_token', '')}
+
+
 @app.before_request
 def protect_posts():
     if request.method == 'POST' and request.endpoint != 'login':
         if not session.get('admin'):
             abort(403)
-        if not secrets.compare_digest(request.form.get('csrf_token', ''), session.get('csrf_token', '')):
+        submitted_token = request.form.get('csrf_token', '')
+        expected_token = session.get('csrf_token', '')
+        if not submitted_token or not expected_token or not secrets.compare_digest(submitted_token, expected_token):
             abort(400, 'Token de formulário inválido')
 
 
