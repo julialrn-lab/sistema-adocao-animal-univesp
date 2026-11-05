@@ -1,0 +1,14 @@
+SISTEMA DE PROTECAO ANIMAL - VERSAO COM ACESSO RESTRITO
+
+1. Faca copia de seguranca da pasta antiga.
+2. Extraia esta versao em uma pasta nova.
+3. Se quiser manter os dados, COPIE caes.db e a pasta fotos da versao anterior para esta pasta (nao apague os originais).
+4. Execute CONFIGURAR_ACESSO.bat para criar usuario e senha (senha de no minimo 12 caracteres).
+5. Execute INICIAR.bat.
+6. Site publico: http://localhost:8000/adocao
+7. Painel veterinario: http://localhost:8000/login
+8. API publica: http://localhost:8000/api/animais
+
+A pagina publica e acessivel sem login. Painel, cadastro, tratamentos e edicao exigem login. As rotas POST verificam token CSRF. Fotos de animais nao disponiveis para adocao nao sao publicas.
+
+IMPORTANTE: O programa roda LOCALMENTE no seu computador. Para acesso pela internet, ainda e necessario hospedagem segura, HTTPS, configuracao de cookies seguros, revisao de seguranca e politicas de privacidade. Nao publique caes.db, .auth.json ou .secret_key. Nao use dados pessoais reais neste prototipo.
