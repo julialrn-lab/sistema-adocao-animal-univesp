@@ -1,3 +1,131 @@
+from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory, abort, session
+from pathlib import Path
+from werkzeug.utils import secure_filename
+from werkzeug.security import check_password_hash
+from uuid import uuid4
+from functools import wraps
+import sqlite3
+import os
+import json
+import secrets
+
+BASE = Path(__file__).resolve().parent
+app = Flask(__name__)
+
+# On Render, configure SECRET_KEY in Environment Variables.
+# Locally, keep a generated key in an ignored file.
+secret_key = os.environ.get('SECRET_KEY')
+key_file = BASE / '.secret_key'
+if not secret_key:
+    if key_file.exists():
+        secret_key = key_file.read_text(encoding='utf-8').strip()
+    if not secret_key:
+        secret_key = secrets.token_hex(32)
+        key_file.write_text(secret_key, encoding='utf-8')
+
+app.config.update(
+    SECRET_KEY=secret_key,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=bool(os.environ.get('RENDER')),
+    MAX_CONTENT_LENGTH=3 * 1024 * 1024,
+)
+
+DB = BASE / 'caes.db'
+UPLOADS = BASE / 'fotos'
+UPLOADS.mkdir(exist_ok=True)
+STATUSES = ('Em tratamento', 'Disponível para adoção', 'Adotado')
+
+
+def db():
+    connection = sqlite3.connect(DB)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def init_db():
+    with db() as connection:
+        connection.execute('CREATE TABLE IF NOT EXISTS animais(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT NOT NULL,sexo TEXT,idade TEXT,resgate TEXT,status TEXT NOT NULL,observacoes TEXT)')
+        connection.execute('CREATE TABLE IF NOT EXISTS tratamentos(id INTEGER PRIMARY KEY AUTOINCREMENT,animal_id INTEGER NOT NULL,data TEXT NOT NULL,procedimento TEXT NOT NULL,observacoes TEXT,FOREIGN KEY(animal_id) REFERENCES animais(id))')
+        if 'foto' not in [column[1] for column in connection.execute('PRAGMA table_info(animais)')]:
+            connection.execute('ALTER TABLE animais ADD COLUMN foto TEXT')
+
+
+def get_animals(public=False):
+    with db() as connection:
+        sql = 'SELECT * FROM animais' + (' WHERE status=?' if public else '') + ' ORDER BY id DESC'
+        params = ('Disponível para adoção',) if public else ()
+        return [dict(row) for row in connection.execute(sql, params)]
+
+
+def save_photo(file):
+    if not file or not file.filename:
+        return None
+    ext = Path(secure_filename(file.filename)).suffix.lower()
+    if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
+        abort(400, 'Formato de foto inválido')
+    content = file.read()
+    valid = (
+        (ext in ('.jpg', '.jpeg') and content.startswith(b'\xff\xd8\xff'))
+        or (ext == '.png' and content.startswith(b'\x89PNG\r\n\x1a\n'))
+        or (ext == '.webp' and content.startswith(b'RIFF') and content[8:12] == b'WEBP')
+    )
+    if not valid or len(content) > 3_000_000:
+        abort(400, 'Foto inválida ou muito grande')
+    filename = uuid4().hex + ext
+    (UPLOADS / filename).write_bytes(content)
+    return filename
+
+
+def admin_required(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        if not session.get('admin'):
+            return redirect(url_for('login'))
+        return function(*args, **kwargs)
+    return wrapper
+
+
+@app.before_request
+def protect_posts():
+    if request.method == 'POST' and request.endpoint != 'login':
+        if not session.get('admin'):
+            abort(403)
+        if not secrets.compare_digest(request.form.get('csrf_token', ''), session.get('csrf_token', '')):
+            abort(400, 'Token de formulário inválido')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('usuario', '')
+        password = request.form.get('senha', '')
+        expected_username = os.environ.get('ADMIN_USER')
+        expected_hash = os.environ.get('ADMIN_PASSWORD_HASH')
+
+        # The local configuration file remains supported for Windows testing.
+        if not expected_username or not expected_hash:
+            authfile = BASE / '.auth.json'
+            if not authfile.exists():
+                abort(503, 'Acesso administrativo não configurado')
+            stored = json.loads(authfile.read_text(encoding='utf-8'))
+            expected_username = stored['usuario']
+            expected_hash = stored['senha_hash']
+
+        if (secrets.compare_digest(username, expected_username)
+                and check_password_hash(expected_hash, password)):
+            session.clear()
+            session['admin'] = True
+            session['csrf_token'] = secrets.token_hex(32)
+            return redirect(url_for('painel'))
+        return render_template('login.html', erro='Usuário ou senha incorretos'), 401
+    return render_template('login.html')
+
+
+@app.post('/sair')
+@admin_required
+def sair():
+    session.clear()
     return redirect(url_for('adocao'))
 
 
